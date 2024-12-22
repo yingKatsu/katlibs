@@ -1,0 +1,175 @@
+--@name katlibs/fsm
+--@author katsu
+--@shared
+
+--state------------------------------------------
+
+local fsmstate = class("katlib_fsmcontroller")
+
+local emptyTempHooksTab = {}
+setmetatable(emptyTempHooksTab, {["__index"]=function(t,k) local newTab = {} t[k] = newTab return newTab end})
+
+local stateID = 0
+
+function fsmstate:initialize(stateName,func)
+    self.stateController = nil
+    self.stateName = stateName
+
+    self._func = func
+    
+    stateID = stateID + 1
+    self._stateID = tostring(chip():entIndex())..tostring(stateID)
+end
+
+function fsmstate:addTempHook(hookname,uniquekey,func)
+    if func == nil then --no name given, hook can only be removed on state end
+        func = uniquekey
+        local hookNum = #self.stateController._unnamedTempHooks[hookname]+1
+        uniquekey = "kl:fsm_"..self._stateID.."_tHookID_"..tostring(hookNum)
+        table.insert(self.stateController._unnamedTempHooks[hookname],uniquekey)   
+    else --name given, hook can be removed partway through the state if need be
+        uniquekey = "kl:fsm_"..self._stateID.."_tHook_"..uniquekey
+        self.stateController._tempHooks[hookname][uniquekey] = true
+    end
+    hook.add(hookname,uniquekey,func)
+end
+
+function fsmstate:removeTempHook(hookname,name)
+    hook.remove(hookname,"kl:fsm_"..self._stateID.."_tHook_"..name)
+end
+
+function fsmstate:addExitCB(cb)
+    table.insert(self.stateController._exitCBs,cb)
+end
+
+--controller------------------------------------------
+
+fsm = class("katlib_fsmcontroller")
+
+function fsm:initialize()
+    self.stateTable = nil
+    self.currState = nil
+    self.currStateName = nil
+    
+    self._unnamedTempHooks = table.copy(emptyTempHooksTab)
+    self._tempHooks = table.copy(emptyTempHooksTab)
+    self._exitCBs = {}    
+end
+
+function fsm:setStateTable(tab)
+    if self.stateTable == nil then
+        self.stateTable = {}
+        for stateName,func in pairs(tab) do
+            local newState = fsmstate:new(stateName,func)
+            self.stateTable[stateName] = newState
+            newState.stateController = self
+        end
+    else
+        print(self.stateTable)
+        throw("kl:fsm| state table already set!")
+    end
+end
+
+function fsm:setState(stateName,...)
+    if self.stateTable == nil then    
+        throw("kl:fsm| no state table!")
+    end
+        
+    --run last state exit cbs
+    if #self._exitCBs > 0 then
+        for _,cb in pairs(self._exitCBs) do
+            cb(stateName)
+        end
+    end
+    
+    --clean temphooks
+    for hookname,tab in pairs(self._unnamedTempHooks) do
+        for _,uniquekey in pairs(tab) do
+            hook.remove(hookname,uniquekey)
+        end
+    end
+    
+    for hookname,tab in pairs(self._tempHooks) do
+        for uniquekey,_ in pairs(tab) do
+            hook.remove(hookname,uniquekey)
+        end
+    end
+    
+    if stateName == nil then
+        --dead end; discard statecontroller
+    elseif self.stateTable[stateName] ~= nil then
+        local nextState = self.stateTable[stateName]
+        
+        --setup new state
+        self.currStateName = stateName
+        self._unnamedTempHooks = table.copy(emptyTempHooksTab)
+        self._tempHooks = table.copy(emptyTempHooksTab)
+        self._exitCBs = {}   
+
+        --run
+        self.stateTable[stateName]:_func(...)
+        
+        --call statechange cb
+        if self.stateChangeCB ~= nil then
+            self.stateChangeCB(stateName)
+        end
+    else
+        throw("kl:fsm| state doesnt exist!")
+    end
+end
+
+function fsm:onStateChange(cb)
+    self.stateChangeCB = cb
+end
+
+--[[
+if SERVER then
+    local statemachine = fsm:new()
+    
+    statemachine:setStateTable({
+        ["state1"] = function(state)
+            state:addTempHook("KeyPress","hook2",function(p,k)
+                if p == owner() then
+                    if k == IN_KEY.RELOAD then
+                        print("hook2 r",timer.systime())
+                    end
+                end
+            end)
+            
+            state:addTempHook("KeyPress",function(p,k)
+                if p == owner() then
+                    if k == IN_KEY.RELOAD then
+                        print("hook1 r",timer.systime())
+                    elseif k == IN_KEY.ATTACK2 then
+                        print("hook2 remove")
+                        self:removeTempHook("KeyPress","hook2")
+                    elseif k == IN_KEY.USE then
+                        print("use, next state")
+                        statemachine:setState("state2")
+                    end
+                end
+            end)
+                    
+            state:addExitCB(function()
+                print("state1 onLeave CB")
+            end)
+        end,
+            
+        ["state2"] = function(state)
+            timer.simple(1,function()
+                statemachine:setState("state1")
+            end)
+            
+            state:addExitCB(function()
+                print("state2 onLeave CB")
+            end)
+            
+            state:addExitCB(function()
+                print("state2 onLeave CB2")
+            end)
+        end,    
+    })
+    
+    statemachine:setState("state1") --begin
+end
+]]

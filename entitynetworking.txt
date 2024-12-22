@@ -1,0 +1,185 @@
+--@name katlibs/entitynetworking
+--@author
+--@shared
+
+entitynetworking = {}
+
+--[[
+this library is useful for networking entities of a group from server to client
+to perform clientside-only functions on them based on their group
+without having to deal with nullentity errors from lag, PVS, or dropped
+net messages due to pre-client initialization
+
+lib usage example at bottom
+]]
+
+if SERVER then
+    local preInitQueue = {}
+    local preInitQueuePrivate = {}
+    
+    hook.add("ClientInitialized","kl:en_ci",function(p)
+        for e,v in pairs(preInitQueue) do
+            net.start("kl:en_enttoclient")
+            net.writeInt(e:entIndex(),14)
+            net.writeString(v.functionkey)
+            net.writeString(v.exdata)            
+            net.send(p)
+        end
+        if preInitQueuePrivate[p] ~= nil then
+            for e,v in pairs(preInitQueuePrivate[p]) do
+                net.start("kl:en_enttoclient")
+                net.writeInt(e:entIndex(),14)
+                net.writeString(v.functionkey)
+                net.writeString(v.exdata)
+                net.send(p)
+            end
+        end
+    end)
+    
+    local listenForRemoval = {}
+    function entitynetworking:sendToClient(clfunctionkey,e,extradata,player)
+        if extradata == nil then
+            extradata = ""
+        end
+        
+        net.start("kl:en_enttoclient")
+        net.writeInt(e:entIndex(),14)
+        net.writeString(clfunctionkey)
+        net.writeString(extradata)
+                    
+        if player == nil then
+            net.send()
+            preInitQueue[e] = {["functionkey"]=clfunctionkey,["exdata"]=extradata}
+        else
+            net.send(player)
+            if preInitQueuePrivate[player] == nil then
+                preInitQueuePrivate[player] = {}
+            end
+            preInitQueuePrivate[player][e] = {["functionkey"]=clfunctionkey,["exdata"]=extradata}
+        end
+        listenForRemoval[e] = e
+    end
+    
+    hook.add("EntityRemoved","kl:en_er",function(e)
+        if listenForRemoval[e] ~= nil then
+            for k,_ in pairs(preInitQueue) do
+                if k == e then
+                    preInitQueue[k] = nil
+                end
+            end
+            for ply,plyTab in pairs(preInitQueuePrivate) do
+                for k,_ in pairs(plyTab) do
+                    if k == e then
+                        preInitQueuePrivate[ply][k] = nil
+                    end
+                end
+            end
+            
+            net.start("kl:en_entremoved")
+            net.writeInt(e:entIndex(),14)
+            net.send()
+            
+            listenForRemoval[e] = nil
+        end
+    end)
+    
+    hook.add("PlayerDisconnect","kl:en_pd",function(ply)
+        preInitQueuePrivate[ply] = nil
+    end)
+else
+    local entityReceivedCallbacks = {}
+    function entitynetworking:addReceivedCallback(clfunctionkey,cb)
+        entityReceivedCallbacks[clfunctionkey] = cb
+    end
+    
+    local onRemoveCallbacks = {}
+    function entitynetworking:addRemovedCallback(clfunctionkey,cb)
+        onRemoveCallbacks[clfunctionkey] = cb
+    end
+    
+    function entitynetworking:removeReceivedCallback(clfunctionkey)
+        entityReceivedCallbacks[clfunctionkey] = nil
+    end
+
+    function entitynetworking:removeRemovedCallback(clfunctionkey)
+        onRemoveCallbacks[clfunctionkey] = nil
+    end 
+       
+    local creationQueue = {}
+    local deletionQueue = {}
+    net.receive("kl:en_enttoclient",function() --on entity receieve, check if exists on client (may not due to lag or PVS) before performing functions
+        local eid = net.readInt(14)
+        local functionkey = net.readString()
+        local extradata = net.readString()
+        local ent = entity(eid)
+        if entityReceivedCallbacks[functionkey] ~= nil then
+            if isValid(ent) then
+                entityReceivedCallbacks[functionkey](eid,extradata)
+                deletionQueue[eid] = functionkey
+            else
+                creationQueue[eid] = {["functionkey"]=functionkey,["exdata"]=extradata}
+            end
+        end
+    end)
+    hook.add("NetworkEntityCreated","kl:en_awaitentity",function(e) --if an entity does not immediately exist upon network receiving, do functions to it instead here
+        local eid = e:entIndex()
+        if creationQueue[eid] ~= nil then
+            local data = creationQueue[eid]
+            entityReceivedCallbacks[data.functionkey](eid,data.exdata)
+            deletionQueue[eid] = data.functionkey
+            creationQueue[eid] = nil
+        end
+    end)
+    
+    net.receive("kl:en_entremoved",function() --removalcb when received from server that ent was removed
+        local eid = net.readInt(14)
+        if deletionQueue[eid] ~= nil and onRemoveCallbacks[deletionQueue[eid]] ~= nil then
+            onRemoveCallbacks[deletionQueue[eid]](eid)
+        end
+    end)
+end
+
+--[[
+if SERVER then
+    wire.adjustInputs({"Base"},{"Entity"})
+    local base = wire.ports.Base
+    local ent = prop.create(base:localToWorld(Vector(0,0,50)),base:getAngles(),"models/hunter/blocks/cube025x025x025.mdl",true)
+    entitynetworking:sendToClient("glooper",ent)
+    
+    local h = hologram.create(ent:getPos(),ent:getAngles(),"models/holograms/tetra.mdl",Vector(0.01))
+    h:setColor(Color(255,0,0))
+    h:setParent(ent)
+            
+    local ent2 = prop.create(base:localToWorld(Vector(0,0,100)),base:getAngles(),"models/hunter/blocks/cube025x025x025.mdl",true)
+    entitynetworking:sendToClient("swaoser",ent2)
+    
+    local ent3 = prop.create(base:localToWorld(Vector(0,0,150)),base:getAngles(),"models/hunter/blocks/cube025x025x025.mdl",true)
+    entitynetworking:sendToClient("swaoser",ent3)
+    
+    wire.adjustOutputs({"Debug"},{"number"})
+    hook.add("tick","",function()
+        wire.ports.Debug = owner():testPVS(base) and 1 or 0
+    end)
+elseif CLIENT then    
+    local holos = {}
+    
+    entitynetworking:addReceivedCallback("glooper",function(eid)
+        holos[eid] = hologram.create(entity(eid):getPos(),entity(eid):getAngles(),"models/holograms/icosphere.mdl",Vector(2))
+        holos[eid]:setColor(Color(255,0,0))
+        print("glooper",eid)
+    end)
+    
+    entitynetworking:addReceivedCallback("swaoser",function(eid)
+        holos[eid] = hologram.create(entity(eid):getPos(),entity(eid):getAngles(),"models/holograms/tetra.mdl",Vector(2))
+        holos[eid]:setColor(Color(0,0,255))
+        holos[eid]:setParent(entity(eid))
+        print("swaoser",eid)
+    end)
+    
+    local function delHolo(eid)
+        holos[eid]:remove()
+    end
+    entitynetworking:addRemovedCallback("swaoser",delHolo)
+    entitynetworking:addRemovedCallback("glooper",delHolo)
+end
+]]

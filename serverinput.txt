@@ -1,0 +1,178 @@
+--@name serverInput
+--@author katsu
+--@shared
+
+if SERVER then
+    serverInput = {}
+    
+    local infiniteIndexMM
+    infiniteIndexMM = function(t,k)
+        local newTab = {}
+        setmetatable(newTab,{["__index"]=infiniteIndexMM})
+        t[k] = newTab
+        return newTab
+    end
+    
+    local initialized = {}
+    local preClientQueue = {}
+    setmetatable(preClientQueue,{["__index"]=infiniteIndexMM})
+ 
+    local cbs = {}
+    setmetatable(cbs,{["__index"]=infiniteIndexMM})
+    
+    local listenedKeys = {}
+    setmetatable(listenedKeys,{["__index"]=infiniteIndexMM})
+    
+    local function updateListenedKeys(player)
+        local clKeyTabUpdate = {}
+        for _,keyTab in pairs(listenedKeys[player]) do
+            table.merge(clKeyTabUpdate, keyTab)
+        end
+                
+        net.start("kl:si_listen")
+        net.writeUInt(#clKeyTabUpdate,7)
+        for _,v in pairs(clKeyTabUpdate) do
+            net.writeUInt(v,7)
+        end
+        net.send(player)
+    end
+    
+    function serverInput.addHook(p,hookKey,keyTab,f)
+        if initialized[p] then
+            if not table.hasValue(chip():getErroredPlayers()) then
+                listenedKeys[p][hookKey] = keyTab
+                updateListenedKeys(p)
+                
+                for _,key in pairs(keyTab) do
+                    cbs[p][key][hookKey] = f
+                end
+            else
+                print("katlib:serverInput| cannot listen to player [" .. p:getName() .. "] - sf errored on client")
+            end
+        else
+            table.insert(preClientQueue[p],{hookKey,keyTab,f})
+        end
+    end
+    
+    hook.add("ClientInitialized","kl:si_ci",function(p)
+        initialized[p] = true
+        if preClientQueue[p] ~= nil then
+            for _,v in pairs(preClientQueue[p]) do
+                serverInput.addHook(p,v[1],v[2],v[3])
+            end
+        end
+        preClientQueue[p] = nil
+    end)
+    
+    net.receive("kl:si_newListenerResponse",function()
+        local p = net.readEntity()
+        local hasPerms = net.readBool()
+        if not hasPerms then
+            print("katlib:serverInput| cannot listen to player [" .. p:getName() .. "] - permission denied")
+            cbs[p] = nil
+        end
+    end)
+    
+    function serverInput.removeHook(p,hookKey)
+        listenedKeys[p][hookKey] = nil
+        updateListenedKeys(p)
+        
+        for key,hookFuncTab in pairs(cbs[p]) do
+            hookFuncTab[hookKey] = nil
+            if table.count(hookFuncTab) == 0 then
+                cbs[p][key] = nil
+            end
+        end
+        
+        if table.count(cbs[p]) == 0 then
+            cbs[p] = nil
+            
+            net.start("kl:si_stopListen")
+            net.writeBool(true)
+            net.send(p)
+        end
+    end
+    
+    net.receive("kl:si_key",function()
+        local down = net.readBool()
+        local p = net.readEntity()
+        local k = net.readUInt(7)
+        
+        if cbs[p] ~= nil and cbs[p][k] ~= nil then
+            for _,func in pairs(cbs[p][k]) do
+                func(k,down)
+            end
+        end
+    end)
+elseif CLIENT then
+    if permissionManager then
+        permissionManager.setupPerms({
+                                        "input",
+                                    })
+    end
+
+    local keys = {}
+    
+    net.receive("kl:si_listen",function()
+        local hasPermission = hasPermission("input")
+
+        net.start("kl:si_newListenerResponse")
+        net.writeEntity(player())
+        net.writeBool(hasPermission)
+        net.send()
+        
+        if hasPermission then
+            local numKeys = net.readUInt(7)
+            
+            for i=1,numKeys do
+                keys[net.readUInt(7)] = true
+            end
+    
+            hook.add("inputPressed","kl:si_ip",function(k)
+                if keys[k] then
+                    net.start("kl:si_key")
+                    net.writeBool(true)
+                    net.writeEntity(player())
+                    net.writeUInt(k,7)
+                    net.send()
+                end
+            end)
+            
+            hook.add("inputReleased","kl:si_ir",function(k)
+                if keys[k] then
+                    net.start("kl:si_key")
+                    net.writeBool(false)
+                    net.writeEntity(player())
+                    net.writeUInt(k,7)
+                    net.send()
+                end
+            end)
+        end
+    end)
+    
+    net.receive("kl:si_stopListen",function()
+        keys = {}
+        hook.remove("inputPressed","kl:si_ip")
+        hook.remove("inputReleased","kl:si_ir")
+    end)
+end
+
+--[[
+if SERVER then
+    serverInput.addHook(owner(),"kat_test_serverInput1",{KEY.B,KEY.E},function(key,down)
+        print(key,down,"test1")
+    end)
+    
+    serverInput.addHook(owner(),"kat_test_serverInput2",{KEY.B,KEY.R},function(key,down)
+        print(key,down,"test2")
+    end)
+
+    timer.simple(5,function()
+        serverInput.removeHook(owner(),"kat_test_serverInput1")
+    end)
+    
+    timer.simple(10,function()
+        serverInput.removeHook(owner(),"kat_test_serverInput2")
+    end)
+end
+]]

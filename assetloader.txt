@@ -1,0 +1,71 @@
+--@name katlibs/assetloader
+--@author katsu
+--@shared
+
+if permissionManager then
+    permissionManager.setupPerms({
+                                    "file.writeTemp",
+                                })
+end
+
+assetloader = {}
+assetloader.assetPaths = {}
+
+local SIGNATURE_LOCALFILEHEADER = 0x04034B50
+local SIGNATURE_CENTRALDIRHEADER = 0x02014B50
+
+function assetloader.loadFromZip(zipdata,threaded)
+    local stream = bit.stringstream(zipdata)
+    local filePaths = {}
+    local rawData = {}
+    
+    while true do
+        local signature = stream:readUInt32()
+        if signature ~= SIGNATURE_LOCALFILEHEADER then
+
+            if signature == SIGNATURE_CENTRALDIRHEADER then
+                table.add(assetloader.assetPaths,filePaths)
+                return filePaths,rawData -- end of zip
+            else
+                throw("katlib:assetloader| zip is evil?!")
+            end
+        end
+
+        stream:skip(4) --skip PKZIP vernum(2) + purpose(2)
+
+        local compressionMethod = stream:readUInt16()
+        if compressionMethod ~= 0 then
+            throw("katlib:assetloader| zip is compressed!")
+        end
+
+        stream:skip(4) --skip modify time(2) + modify date(2)
+        
+        local CRC32_checksum = stream:readUInt32()
+
+        local compressedSize = stream:readUInt32()
+        
+        stream:skip(4) --skip uncompressed size(4)
+        
+        local fileName_len = stream:readUInt16()
+        local extraField_len = stream:readUInt16()
+        
+        local fileName = stream:read(fileName_len)
+        stream:skip(extraField_len) --skip extrafield
+
+        local fileData = stream:read(compressedSize)
+        local extension = fileName:match("^.+(%..+)$")
+        
+        if extension == ".txt" then
+            rawData[fileName] = fileData
+        end
+
+        printConsole(Color(255,0,0),"kl:al|",Color(255,255,255)," file loaded: " .. fileName)
+
+        filePaths[fileName] = file.writeTemp(CRC32_checksum..extension,fileData)
+        
+        if threaded != nil and threaded == true then
+            coroutine.yield()
+        end
+    end
+end
+

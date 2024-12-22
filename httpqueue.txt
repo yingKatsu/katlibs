@@ -1,0 +1,46 @@
+--@name katlibs/httpqueue
+--@author katsu
+--@shared
+
+if permissionManager then
+    permissionManager.setupPerms({
+                                    "http.get",
+                                })
+end
+
+httpQueue = {}
+
+local queued = {}
+local function callNextInQueue()
+    if queued[1] ~= nil then //when an active request finishes (a http slot is free), check the queue to see if one is waiting
+        coroutine.resume(queued[1])
+        table.remove(queued,1)
+    end
+end
+    
+function httpQueue.get(url,cbSuccess,cbFail,headers)
+    local co
+    co = coroutine.create(function()
+        local cbSuccessEdited = function(body,length,headers,code) //wrap the http cbs to sneak in our own code at the end
+            cbSuccess(body,length,headers,code)
+            callNextInQueue()
+        end
+
+        local cbFailEdited = function(reason)
+            if cbFail != nil then
+                cbFail(reason)
+            end
+            callNextInQueue()
+        end
+
+        if not http.canRequest() then
+            table.insert(queued,co)
+            coroutine.yield()
+        end
+
+        http.get(url,cbSuccessEdited,cbFailEdited,headers)
+    end)
+    coroutine.resume(co)
+end
+
+return httpQueue

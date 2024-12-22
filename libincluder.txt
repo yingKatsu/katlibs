@@ -1,0 +1,66 @@
+--@name katlibs/libincluder
+--@author katsu
+--@server
+
+libIncluder = class("libIncluder")
+
+function libIncluder:initialize()
+    self.libs_cl = {}
+    self.libs_cl_owneronly = {}
+    self.libs_sv = {}    
+    self.libs_sh = {}
+    self.main = ""
+end
+
+function libIncluder:runSH(...)
+    for _,lib in pairs({...}) do
+        table.insert(self.libs_sh,lib)
+    end
+end
+    
+function libIncluder:runSV(...)
+    for _,lib in pairs({...}) do
+        table.insert(self.libs_sv,lib)
+    end
+end
+
+function libIncluder:runCL(...)
+    for _,lib in pairs({...}) do
+        table.insert(self.libs_cl,lib)
+    end
+end
+
+function libIncluder:runCL_owneronly(...)
+    for _,lib in pairs({...}) do
+        table.insert(self.libs_cl_owneronly,lib)
+    end
+end
+
+function libIncluder:runMain(code)
+    self.main = code
+end
+
+function libIncluder:getCode(threaded)
+    local str = ""
+
+    local function addLibsToString(tab)
+        for _,lib in pairs(tab) do
+            str = str .. "do\n" .. lib .. "\nend\n"
+            if threaded then
+                coroutine.yield()
+            end
+        end
+    end
+
+    str = str .. "if CLIENT then\n"
+    addLibsToString(self.libs_cl)
+    str = str .. "if player() == owner() then\n"        
+    addLibsToString(self.libs_cl_owneronly)
+    str = str .. "end\nelseif SERVER then\n"
+    addLibsToString(self.libs_sv)
+    str = str .. "end\n"       
+    addLibsToString(self.libs_sh)
+    str = str .. self.main
+
+    return str
+end

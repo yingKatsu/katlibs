@@ -1,0 +1,83 @@
+--@name timeutils
+--@author katsu
+--@shared
+timeutils = {}
+
+function timeutils.newDTtween()
+    local savedTime = timer.systime()
+    local firstExecAfterCompleted = true
+    
+    return function(length,delay,func)
+        if func == nil then
+            func = delay
+            delay = 0
+        end
+        
+        local time = timer.systime()
+
+        local beforeDelayDT = time - savedTime
+        local DT = beforeDelayDT - delay
+        
+        if beforeDelayDT >= delay then
+            if DT <= length then
+                local up = DT/length
+                func(up)
+                return false
+            else
+                if firstExecAfterCompleted then
+                    func(1) --incase this function is ever tick divided
+                    firstExecAfterCompleted = false
+                end
+                return true
+            end
+        end
+    end
+end
+
+function timeutils.newEdgeTrigger()
+    local savedTime = timer.systime()
+
+    local risingFuncCalled = false
+    local fallingFuncCalled = false
+    return function(length,delay,risingEdgeFunc,fallingEdgeFunc)  
+        if fallingEdgeFunc == nil then
+            fallingEdgeFunc = risingEdgeFunc
+            risingEdgeFunc = delay
+            delay = 0
+        end
+        
+        local time = timer.systime()
+        
+        local beforeDelayDT = time - savedTime
+        local DT = beforeDelayDT - delay
+        
+        if beforeDelayDT >= delay then
+            if DT <= length then
+                if not risingFuncCalled and risingEdgeFunc ~= nil then
+                    risingEdgeFunc()
+                    risingFuncCalled = true
+                end
+                return false
+            else
+                if not fallingFuncCalled and fallingEdgeFunc ~= nil then
+                    fallingEdgeFunc()
+                    fallingFuncCalled = true
+                end
+                return true
+            end
+        end
+    end
+end
+
+function timeutils.newTickDivider()
+    local savedTime = timer.systime()
+    return function(length,func)
+        local time = timer.systime()
+        local DT = time - savedTime
+        
+        if DT > length then
+            func()
+            savedTime = time
+        end
+    end
+end

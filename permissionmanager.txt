@@ -1,0 +1,70 @@
+--@name katlibs/permissionmanager
+--@author katsu
+--@shared
+
+if SERVER then
+    net.receive("kl:pm_missingperms",function()
+        print(Color(255,0,0),"kl:pm| missing perm - ",Color(255, 0, 97),net.readString())
+    end)    
+elseif CLIENT then
+    local debugPerms = true
+    
+    permissionManager = {}
+    
+    local permsRequired = {}
+    
+    function permissionManager.setupPerms(permTab)
+        for i=1,#permTab do
+            permsRequired[permTab[i]] = true
+        end
+    end
+    
+    local specialCases = {
+        ["http.get"] = hasPermission("http.get","https://dl.dropboxusercontent.com/"),
+        ["hologram.setRenderProperty"] = hasPermission("hologram.setRenderProperty",chip()),
+        ["entities.setRenderProperty"] = hasPermission("entities.setRenderProperty",chip()),
+        ["entities.setParent"] = hasPermission("entities.setParent",chip()),
+        ["entities.emitSound"] = hasPermission("entities.emitSound",chip()),        
+    }
+    
+    function permissionManager.boot(msg)
+        local permsNotMet = {}
+        
+        for k,_ in pairs(permsRequired) do
+            local checkPerm = specialCases[k] ~= nil and specialCases[k] or hasPermission(k)
+            
+            if not checkPerm then
+                table.insert(permsNotMet,k)
+            end
+        end
+            
+        if #permsNotMet == 0 then
+            BOOT_CLIENTSIDE()
+        else
+            
+            if debugPerms and CLIENT then
+                local pString = ""
+                for i=1,#permsNotMet do
+                    pString = pString .. permsNotMet[i] .. " "
+                end
+            
+                if debugPerms and CLIENT then
+                    net.start("kl:pm_missingperms")
+                    net.writeString(player():getName() .. ": " .. pString)
+                    net.send()
+                end
+            end
+            
+            hook.add("permissionrequest","kl:pm_bootChip",function()
+                if permissionRequestSatisfied() then
+                    BOOT_CLIENTSIDE()
+                end
+            end)
+            printTable(permsNotMet)
+            if msg == nil then
+                msg = "perms pls"
+            end
+            setupPermissionRequest(permsNotMet,msg,true)
+        end
+    end
+end
